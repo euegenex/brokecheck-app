@@ -6,6 +6,11 @@ import Login from './components/Login';
 import Register from './components/Register';
 import NewTransaction from './components/NewTransaction';
 import Dashboard from './components/Dashboard';
+import FloatingNav from './components/FloatingNav';
+import History from './components/History';
+import Settings from './components/Settings';
+import Streak from './components/Streak';
+import Analytics from './components/Analytics';
 
 // Protected Route wrapper component
 const ProtectedRoute = ({ children, user, loading }) => {
@@ -42,7 +47,6 @@ function App() {
     <Router>
       <Routes>
         {/* Protected Dashboard Route */}
-        {/* Protected Dashboard Route */}
         <Route 
           path="/" 
           element={
@@ -51,6 +55,7 @@ function App() {
             </ProtectedRoute>
           } 
         />
+        
 
         {/* Protected Data Entry Route */}
         <Route 
@@ -62,6 +67,43 @@ function App() {
           } 
         />
 
+        {/* Protected History Route */}
+     <Route 
+       path="/history" 
+       element={
+         <ProtectedRoute user={user} loading={loading}>
+           <History />
+         </ProtectedRoute>
+       } 
+     />
+        {/* Protected Settings Route */}
+        <Route 
+          path="/settings" 
+          element={
+            <ProtectedRoute user={user} loading={loading}>
+              <Settings />
+            </ProtectedRoute>
+          } 
+        />
+
+        {/* Protected Streak Route */}
+        <Route 
+          path="/streak" 
+          element={
+            <ProtectedRoute user={user} loading={loading}>
+              <Streak />
+            </ProtectedRoute>
+          } 
+        />
+        {/* Protected Analytics Route */}
+        <Route 
+          path="/analytics" 
+          element={
+            <ProtectedRoute user={user} loading={loading}>
+              <Analytics />
+            </ProtectedRoute>
+          } 
+        />
         {/* Public Auth Routes */}
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
@@ -69,6 +111,7 @@ function App() {
         {/* Fallback Catch-all */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+     {user && <FloatingNav />}
     </Router>
   );
 }

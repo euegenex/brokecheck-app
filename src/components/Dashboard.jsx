@@ -1,20 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
-import { signOut } from 'firebase/auth';
+import { collection, query, where, onSnapshot, doc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { db, auth } from '../firebase';
 import { Link } from 'react-router-dom';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
-import { LogOut, PlusCircle } from 'lucide-react';
-
-// Tailwind colors for the chart
-const COLORS = ['#0f172a', '#334155', '#64748b', '#94a3b8', '#cbd5e1'];
+import { ChevronLeft, ChevronRight, ArrowUpRight, ArrowDownLeft, Plus, X, Check } from 'lucide-react';
 
 function Dashboard() {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [viewDate, setViewDate] = useState(new Date());
+  
+  // Modal States
+  const [selectedTx, setSelectedTx] = useState(null);
+  const [editingTx, setEditingTx] = useState(null);
+  
+  // Edit Form States
+  const [editCategory, setEditCategory] = useState('');
+  const [editAmount, setEditAmount] = useState('');
 
   useEffect(() => {
-    // Real-time listener for the user's transactions
     const q = query(
       collection(db, 'TRANSACTIONS'),
       where('user_id', '==', auth.currentUser.uid)
@@ -23,10 +26,6 @@ function Dashboard() {
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = [];
       snapshot.forEach((doc) => docs.push({ id: doc.id, ...doc.data() }));
-      
-      // Sort by newest first in JavaScript (avoids Firebase index requirements for the prototype)
-      docs.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
-      
       setTransactions(docs);
       setLoading(false);
     });
@@ -34,197 +33,255 @@ function Dashboard() {
     return () => unsubscribe();
   }, []);
 
-  const handleLogout = async () => {
-    await signOut(auth);
-  };
-
-  // Calculate Totals
-  const totalIncome = transactions
-    .filter(t => t.transaction_type === 'Income')
-    .reduce((acc, curr) => acc + curr.amount, 0);
-
-  const totalExpense = transactions
-    .filter(t => t.transaction_type === 'Expense')
-    .reduce((acc, curr) => acc + curr.amount, 0);
-
-  const balance = totalIncome - totalExpense;
-
-  // --- ALGORITHMIC GAMIFICATION: SAVINGS STREAK ---
-  // Calculates consecutive days (counting backwards from today) where expenses were under 50 GHS
-  const DAILY_BUDGET_LIMIT = 50; 
-
-  const calculateStreak = () => {
-    if (transactions.length === 0) return 0;
-
-    // 1. Group all expenses by date
-    const expensesByDate = {};
-    transactions.forEach(t => {
-      if (t.transaction_type === 'Expense' && t.timestamp) {
-        const date = new Date(t.timestamp.seconds * 1000);
-        const dateStr = date.toDateString(); // e.g., "Wed Jun 24 2026"
-        expensesByDate[dateStr] = (expensesByDate[dateStr] || 0) + t.amount;
-      }
-    });
-
-    // 2. Count backward day-by-day to find the streak
-    let streak = 0;
-    let checkDate = new Date(); // Starts exactly at current local time
-
-    while (true) {
-      const dateStr = checkDate.toDateString();
-      const dailySpent = expensesByDate[dateStr] || 0; // If nothing logged, spent is 0
-
-      if (dailySpent <= DAILY_BUDGET_LIMIT) {
-        streak++;
-        checkDate.setDate(checkDate.getDate() - 1); // Move to yesterday
-      } else {
-        break; // They overspent, streak is broken!
-      }
+  // --- DELETE LOGIC ---
+  const handleDelete = async (id) => {
+    try {
+      await deleteDoc(doc(db, 'TRANSACTIONS', id));
+      setSelectedTx(null);
+    } catch (error) {
+      console.error("Error deleting document: ", error);
     }
-    return streak;
   };
 
-  const currentStreak = calculateStreak();
+  // --- EDIT LOGIC ---
+  const openEditModal = () => {
+    setEditCategory(selectedTx.category);
+    setEditAmount(selectedTx.amount);
+    setEditingTx(selectedTx);
+    setSelectedTx(null); // Close the action sheet
+  };
 
-  // Prepare data for the Recharts Donut Chart (Expenses Only)
-  const expensesByCategory = transactions
-    .filter(t => t.transaction_type === 'Expense')
-    .reduce((acc, curr) => {
-      acc[curr.category] = (acc[curr.category] || 0) + curr.amount;
-      return acc;
-    }, {});
+  const handleUpdate = async (e) => {
+    e.preventDefault();
+    if (!editCategory || !editAmount) return;
 
-  const chartData = Object.keys(expensesByCategory).map(key => ({
-    name: key,
-    value: expensesByCategory[key]
-  }));
+    try {
+      const txRef = doc(db, 'TRANSACTIONS', editingTx.id);
+      await updateDoc(txRef, {
+        category: editCategory,
+        amount: parseFloat(editAmount)
+      });
+      setEditingTx(null); // Close edit modal
+    } catch (error) {
+      console.error("Error updating document: ", error);
+    }
+  };
+
+  // --- WEALTH CALCULATION ---
+  const totalBalance = transactions.reduce((acc, t) => {
+    return t.transaction_type === 'Income' ? acc + t.amount : acc - t.amount;
+  }, 0);
+
+  // --- TIME TRAVEL & DAILY FILTERING ---
+  const handlePrevDay = () => {
+    const newDate = new Date(viewDate);
+    newDate.setDate(newDate.getDate() - 1);
+    setViewDate(newDate);
+  };
+
+  const handleNextDay = () => {
+    const newDate = new Date(viewDate);
+    newDate.setDate(newDate.getDate() + 1);
+    setViewDate(newDate);
+  };
+
+  const isToday = viewDate.toDateString() === new Date().toDateString();
+
+  const dailyTransactions = transactions
+    .filter(t => t.timestamp && new Date(t.timestamp.seconds * 1000).toDateString() === viewDate.toDateString())
+    .sort((a, b) => b.timestamp.seconds - a.timestamp.seconds);
+
+  const daySpent = dailyTransactions.filter(t => t.transaction_type === 'Expense').reduce((a, b) => a + b.amount, 0);
+  const dayEarned = dailyTransactions.filter(t => t.transaction_type === 'Income').reduce((a, b) => a + b.amount, 0);
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-300 border-t-slate-900"></div>
+      <div className="flex min-h-screen items-center justify-center bg-slate-900">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent"></div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 pb-20">
-      {/* Header */}
-      <div className="bg-white px-6 py-5 shadow-sm border-b border-slate-100 flex justify-between items-center">
-        <div>
-          <h1 className="text-xl font-black text-slate-900 tracking-tight">BrokeCheck</h1>
-          <p className="text-xs font-semibold text-slate-500 truncate w-40">{auth.currentUser.email}</p>
-        </div>
-        <button onClick={handleLogout} className="p-2 rounded-full bg-slate-100 text-slate-600 hover:bg-red-50 hover:text-red-600 transition-colors">
-          <LogOut className="w-5 h-5" />
-        </button>
-      </div>
-
-      <div className="max-w-md w-full mx-auto px-4 mt-6 space-y-6">
+    <div className="min-h-screen sm:bg-slate-900 flex justify-center sm:py-10 font-sans selection:bg-indigo-100">
+      <div className="w-full max-w-md bg-gradient-to-b from-indigo-50 via-slate-50 to-white sm:rounded-[3rem] sm:border-[12px] sm:border-black sm:shadow-2xl sm:overflow-y-auto sm:h-[820px] relative pb-32">
         
-        {/* Balance Card */}
-        <div className="bg-slate-900 rounded-3xl p-6 shadow-lg text-white">
-          <p className="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-1">Available Balance</p>
-          <h2 className="text-4xl font-black mb-4">₵ {balance.toFixed(2)}</h2>
-          <div className="flex justify-between border-t border-slate-700 pt-4">
-            <div>
-              <p className="text-xs text-slate-400 font-medium">Income</p>
-              <p className="text-sm font-bold text-green-400">₵ {totalIncome.toFixed(2)}</p>
-            </div>
-            <div className="text-right">
-              <p className="text-xs text-slate-400 font-medium">Expenses</p>
-              <p className="text-sm font-bold text-red-400">₵ {totalExpense.toFixed(2)}</p>
-            </div>
+        <div className="px-5 pt-14 relative z-10">
+          
+          <div className="mb-6 px-1">
+            <p className="text-indigo-900/50 text-xs font-bold uppercase tracking-widest mb-1">Good Morning</p>
+            <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Eugene</h1>
           </div>
-        </div>
-        {/* Gamification: Savings Streak */}
-        <div className="bg-gradient-to-r from-amber-100 to-orange-100 rounded-2xl p-4 shadow-sm border border-orange-200 flex items-center justify-between">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-wider text-orange-800 mb-1">Savings Streak</p>
-            <p className="text-sm font-medium text-orange-900">You've stayed under budget for <span className="font-black text-lg">{currentStreak}</span> days straight! 🔥</p>
-          </div>
-        </div>
 
-        {/* Algorithmic Nudge (Only shows if balance > 50) */}
-        {balance > 50 && (
-          <div className="bg-blue-50 rounded-2xl p-4 shadow-sm border border-blue-100">
-            <div className="flex items-start space-x-3">
-              <div className="bg-blue-100 p-2 rounded-full mt-1">
-                <span className="text-blue-600 font-bold text-lg">💡</span>
-              </div>
-              <div>
-                <p className="text-sm font-bold text-blue-900">Healthy Surplus Detected!</p>
-                <p className="text-xs font-medium text-blue-700 mt-1">
-                  You have a surplus of ₵ {balance.toFixed(2)}. Consider diverting ₵ 20 into a micro-investment vehicle like Achieve or Databank to build long-term capital.
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Analytics Chart */}
-        {chartData.length > 0 ? (
-          <div className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
-            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-800 mb-4">Spending Breakdown</h3>
-            <div className="h-48 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={chartData}
-                    innerRadius={60}
-                    outerRadius={80}
-                    paddingAngle={5}
-                    dataKey="value"
-                    stroke="none"
-                  >
-                    {chartData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip 
-                    formatter={(value) => `₵ ${value.toFixed(2)}`}
-                    contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                  />
-                  <Legend verticalAlign="bottom" height={36} iconType="circle" wrapperStyle={{ fontSize: '12px', fontWeight: '600' }} />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        ) : (
-          <div className="bg-white rounded-3xl p-8 text-center shadow-sm border border-slate-100">
-            <p className="text-slate-500 font-medium text-sm">No expenses logged yet.</p>
-          </div>
-        )}
-
-        {/* Recent Transactions List */}
-        <div>
-          <h3 className="text-sm font-bold uppercase tracking-wider text-slate-800 mb-3 px-2">Recent Logs</h3>
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-            {transactions.slice(0, 5).map((t) => (
-              <div key={t.id} className="flex justify-between items-center p-4 border-b border-slate-50 last:border-0">
-                <div>
-                  <p className="text-sm font-bold text-slate-800">{t.category}</p>
-                  <p className="text-xs font-medium text-slate-400">{t.payment_method}</p>
+          <div className="bg-white rounded-[2rem] p-7 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.08)] border border-white mb-8 relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-50 rounded-full blur-3xl -translate-y-10 translate-x-10"></div>
+            <div className="relative z-10">
+              <div className="flex justify-between items-center mb-4">
+                <div className="h-10 w-10 bg-slate-50 rounded-full flex items-center justify-center">
+                  <span className="text-slate-900 font-bold text-lg">₵</span>
                 </div>
-                <p className={`text-sm font-bold ${t.transaction_type === 'Income' ? 'text-green-600' : 'text-slate-900'}`}>
-                  {t.transaction_type === 'Income' ? '+' : '-'} ₵{t.amount.toFixed(2)}
-                </p>
+                <span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold tracking-wide">
+                  Active Vault
+                </span>
               </div>
-            ))}
-            {transactions.length === 0 && (
-              <p className="text-center text-xs text-slate-400 py-4">Your ledger is empty.</p>
+              <p className="text-slate-500 text-sm font-medium mb-1">Total Balance</p>
+              <h2 className="text-[2.75rem] leading-none font-black text-slate-900 tracking-tighter">
+                {totalBalance.toFixed(2)}
+              </h2>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between px-2 mb-4">
+            <button onClick={handlePrevDay} className="p-2 -ml-2 text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors active:scale-95">
+              <ChevronLeft className="w-6 h-6" />
+            </button>
+            <h2 className="text-[17px] font-bold text-slate-900 tracking-tight">
+              {isToday ? 'Today' : viewDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+            </h2>
+            <button onClick={handleNextDay} disabled={isToday} className={`p-2 -mr-2 rounded-full transition-all ${isToday ? 'text-slate-300 cursor-default' : 'text-indigo-600 hover:bg-indigo-50 active:scale-95'}`}>
+              <ChevronRight className="w-6 h-6" />
+            </button>
+          </div>
+
+          <div className="bg-white rounded-[2rem] shadow-[0_10px_40px_-10px_rgba(0,0,0,0.08)] border border-white overflow-hidden mb-8">
+            {dailyTransactions.length > 0 ? (
+              <div className="flex flex-col">
+                {dailyTransactions.map((t, index) => {
+                  const timeStr = new Date(t.timestamp.seconds * 1000).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+                  const isIncome = t.transaction_type === 'Income';
+
+                  return (
+                    <div key={t.id} className="relative">
+                      <div onClick={() => setSelectedTx(t)} className="flex items-center justify-between p-4 px-5 active:bg-slate-50 transition-colors cursor-pointer">
+                        <div className="flex items-center space-x-4">
+                          <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shadow-sm border border-white ${isIncome ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-500'}`}>
+                            {isIncome ? <ArrowDownLeft className="w-5 h-5" strokeWidth={3} /> : <ArrowUpRight className="w-5 h-5" strokeWidth={3} />}
+                          </div>
+                          <div>
+                            <p className="text-[17px] font-bold text-slate-900 tracking-tight mb-0.5">{t.category}</p>
+                            <p className="text-[13px] text-slate-500 font-medium">{timeStr} • {t.payment_method}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className={`text-[17px] font-bold tracking-tight ${isIncome ? 'text-emerald-600' : 'text-slate-900'}`}>
+                            {isIncome ? '+' : '-'}₵{t.amount.toFixed(2)}
+                          </p>
+                        </div>
+                      </div>
+                      {index !== dailyTransactions.length - 1 && (
+                        <div className="absolute bottom-0 left-[4.5rem] right-0 h-[1px] bg-slate-100"></div>
+                      )}
+                    </div>
+                  );
+                })}
+                
+                <div className="bg-slate-50/50 px-5 py-3.5 flex justify-between items-center border-t border-slate-100">
+                  <span className="text-[13px] font-bold text-slate-400 uppercase tracking-wider">Day Summary</span>
+                  <div className="text-[14px] font-bold">
+                    <span className="text-emerald-600">In: ₵{dayEarned.toFixed(2)}</span>
+                    <span className="mx-2 text-slate-300">|</span>
+                    <span className="text-rose-500">Out: ₵{daySpent.toFixed(2)}</span>
+                  </div>
+                </div>
+
+              </div>
+            ) : (
+              <div className="p-10 text-center flex flex-col items-center justify-center">
+                <div className="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center mb-3 border border-slate-100">
+                  <div className="w-6 h-1 bg-slate-300 rounded-full"></div>
+                </div>
+                <p className="text-slate-500 font-medium text-[15px]">No transactions on this day.</p>
+              </div>
             )}
           </div>
-        </div>
-      </div>
 
-      {/* Floating Action Button */}
-      <Link 
-        to="/new" 
-        className="fixed bottom-6 right-6 bg-slate-900 text-white rounded-full p-4 shadow-lg hover:bg-slate-800 transition-transform hover:scale-105 active:scale-95"
-      >
-        <PlusCircle className="w-6 h-6" />
-      </Link>
+          <div className="flex space-x-3">
+            <Link to="/new?type=Expense" className="flex-1 bg-rose-50 hover:bg-rose-100 active:bg-rose-200 text-rose-600 rounded-2xl py-3.5 flex items-center justify-center space-x-2 transition-colors border border-rose-100">
+              <span className="text-[15px] font-bold tracking-tight">Expense</span>
+            </Link>
+            <Link to="/new?type=Income" className="flex-1 bg-slate-900 active:bg-slate-800 text-white rounded-2xl py-3.5 flex items-center justify-center space-x-2 transition-colors shadow-xl shadow-slate-900/20 border border-slate-800">
+              <Plus className="w-5 h-5" strokeWidth={3} />
+              <span className="text-[15px] font-bold tracking-tight">Income</span>
+            </Link>
+          </div>
+
+        </div>
+
+        {/* --- iOS ACTION SHEET OVERLAY --- */}
+        {selectedTx && (
+          <div className="absolute inset-0 z-50 flex items-end justify-center sm:rounded-[2rem] overflow-hidden">
+            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setSelectedTx(null)}></div>
+            <div className="relative w-full px-4 pb-8 animate-slide-up">
+              <div className="bg-white/90 backdrop-blur-xl rounded-2xl mb-2 overflow-hidden shadow-lg border border-white/20">
+                <div className="px-4 py-4 border-b border-slate-200 text-center">
+                  <p className="text-[13px] font-medium text-slate-500">
+                    {selectedTx.category} • ₵{selectedTx.amount.toFixed(2)}
+                  </p>
+                </div>
+                {/* New Edit Button */}
+                <button 
+                  onClick={openEditModal}
+                  className="w-full py-4 border-b border-slate-200 text-[17px] font-semibold text-indigo-600 active:bg-slate-100 transition-colors"
+                >
+                  Edit Transaction
+                </button>
+                <button 
+                  onClick={() => handleDelete(selectedTx.id)}
+                  className="w-full py-4 text-[17px] font-semibold text-rose-500 active:bg-slate-100 transition-colors"
+                >
+                  Delete Transaction
+                </button>
+              </div>
+              <button onClick={() => setSelectedTx(null)} className="w-full py-4 bg-white/90 backdrop-blur-xl rounded-2xl text-[17px] font-bold text-slate-900 active:bg-slate-100 transition-colors shadow-lg border border-white/20">
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* --- INLINE EDIT MODAL --- */}
+        {editingTx && (
+          <div className="absolute inset-0 z-[60] flex items-center justify-center p-4 sm:rounded-[2rem] overflow-hidden">
+            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setEditingTx(null)}></div>
+            <div className="bg-white rounded-[2rem] w-full max-w-sm p-6 relative z-10 shadow-2xl animate-fade-in border border-slate-100">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-xl font-bold text-slate-900">Edit Record</h3>
+                <button onClick={() => setEditingTx(null)} className="p-2 bg-slate-50 rounded-full text-slate-400 hover:text-slate-900">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <form onSubmit={handleUpdate} className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 block">Title</label>
+                  <input 
+                    type="text" 
+                    value={editCategory} 
+                    onChange={(e) => setEditCategory(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-900 text-lg font-bold rounded-xl px-4 py-3 outline-none focus:border-indigo-500"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 block">Amount (₵)</label>
+                  <input 
+                    type="number" 
+                    step="0.01"
+                    value={editAmount} 
+                    onChange={(e) => setEditAmount(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-900 text-lg font-bold rounded-xl px-4 py-3 outline-none focus:border-indigo-500"
+                    required
+                  />
+                </div>
+                <button type="submit" className="w-full py-4 mt-2 rounded-xl bg-indigo-600 text-white font-bold flex items-center justify-center space-x-2 hover:bg-indigo-700 transition-colors">
+                  <Check className="w-5 h-5" />
+                  <span>Update</span>
+                </button>
+              </form>
+            </div>
+          </div>
+        )}
+
+      </div>
     </div>
   );
 }
