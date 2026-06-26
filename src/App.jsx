@@ -11,6 +11,8 @@ import History from './components/History';
 import Settings from './components/Settings';
 import Streak from './components/Streak';
 import Analytics from './components/Analytics';
+import Buckets from './components/Buckets';
+import Invest from './components/Invest';
 
 // Protected Route wrapper component
 const ProtectedRoute = ({ children, user, loading }) => {
@@ -104,6 +106,25 @@ function App() {
             </ProtectedRoute>
           } 
         />
+
+        <Route
+          path="/buckets"
+          element={
+            <ProtectedRoute user={user} loading={loading}>
+              <Buckets />
+            </ProtectedRoute>
+          }
+        />
+               
+        <Route
+          path="/invest"
+          element={
+            <ProtectedRoute user={user} loading={loading}>
+              <Invest />
+            </ProtectedRoute>
+          }
+        />
+
         {/* Public Auth Routes */}
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />

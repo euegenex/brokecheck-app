@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { collection, query, where, onSnapshot, doc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
 import { db, auth } from '../firebase';
 import { Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, ArrowUpRight, ArrowDownLeft, Plus, X, Check } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ArrowUpRight, ArrowDownLeft, Plus, X, Check, PieChart} from 'lucide-react';
 
 function Dashboard() {
   const [transactions, setTransactions] = useState([]);
@@ -16,21 +17,49 @@ function Dashboard() {
   // Edit Form States
   const [editCategory, setEditCategory] = useState('');
   const [editAmount, setEditAmount] = useState('');
+  const [editNote, setEditNote] = useState('');
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [userName, setUserName] = useState('User');
+
+  // --- DYNAMIC GREETING LOGIC ---
+  const currentHour = new Date().getHours();
+  const greeting = currentHour < 12 ? 'Good morning' 
+                 : currentHour < 18 ? 'Good afternoon' 
+                 : 'Good evening';
 
   useEffect(() => {
-    const q = query(
-      collection(db, 'TRANSACTIONS'),
-      where('user_id', '==', auth.currentUser.uid)
-    );
+    // 1. Wait for Firebase to confirm the user is logged in
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        // --- SMARTER NAME SETTING ---
+        if (user.displayName) {
+          setUserName(user.displayName.split(' ')[0]);
+        } else if (user.email) {
+          // Premium Fallback: Grab the name from the email and capitalize it
+          const emailName = user.email.split('@')[0];
+          setUserName(emailName.charAt(0).toUpperCase() + emailName.slice(1));
+        }
+        
+        // 2. ONLY run the database query if the user exists
+        const q = query(
+          collection(db, 'TRANSACTIONS'),
+          where('user_id', '==', user.uid)
+        );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const docs = [];
-      snapshot.forEach((doc) => docs.push({ id: doc.id, ...doc.data() }));
-      setTransactions(docs);
-      setLoading(false);
+        const unsubscribeSnapshot = onSnapshot(q, (snapshot) => {
+          const docs = [];
+          snapshot.forEach((doc) => docs.push({ id: doc.id, ...doc.data() }));
+          setTransactions(docs);
+          setLoading(false);
+        });
+
+        return () => unsubscribeSnapshot();
+      } else {
+        setLoading(false);
+      }
     });
 
-    return () => unsubscribe();
+    return () => unsubscribeAuth();
   }, []);
 
   // --- DELETE LOGIC ---
@@ -38,6 +67,7 @@ function Dashboard() {
     try {
       await deleteDoc(doc(db, 'TRANSACTIONS', id));
       setSelectedTx(null);
+      setConfirmingDelete(false);
     } catch (error) {
       console.error("Error deleting document: ", error);
     }
@@ -47,8 +77,9 @@ function Dashboard() {
   const openEditModal = () => {
     setEditCategory(selectedTx.category);
     setEditAmount(selectedTx.amount);
+    setEditNote(selectedTx.note || '');
     setEditingTx(selectedTx);
-    setSelectedTx(null); // Close the action sheet
+    setSelectedTx(null);
   };
 
   const handleUpdate = async (e) => {
@@ -59,9 +90,10 @@ function Dashboard() {
       const txRef = doc(db, 'TRANSACTIONS', editingTx.id);
       await updateDoc(txRef, {
         category: editCategory,
-        amount: parseFloat(editAmount)
+        amount: parseFloat(editAmount),
+        note: editNote.trim(),
       });
-      setEditingTx(null); // Close edit modal
+      setEditingTx(null);
     } catch (error) {
       console.error("Error updating document: ", error);
     }
@@ -109,8 +141,10 @@ function Dashboard() {
         <div className="px-5 pt-14 relative z-10">
           
           <div className="mb-6 px-1">
-            <p className="text-indigo-900/50 text-xs font-bold uppercase tracking-widest mb-1">Good Morning</p>
-            <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Eugene</h1>
+            <p className="text-indigo-900/50 text-xs font-bold uppercase tracking-widest mb-1">{greeting}</p>
+            <h1 className="text-3xl font-bold text-slate-900 tracking-tight">
+              {userName}
+            </h1>
           </div>
 
           <div className="bg-white rounded-[2rem] p-7 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.08)] border border-white mb-8 relative overflow-hidden">
@@ -130,6 +164,46 @@ function Dashboard() {
               </h2>
             </div>
           </div>
+
+          {/* Create & Track Budget Button */}
+          <Link to="/buckets" className="w-full bg-indigo-50/50 hover:bg-indigo-50 border border-indigo-100 text-indigo-600 rounded-[1.5rem] py-4 flex items-center justify-center space-x-2 font-bold mb-4 active:scale-95 transition-all">
+            <PieChart className="w-5 h-5" />
+            <span>Create a Budget!</span>
+          </Link>
+
+          {/* Streak mini-widget */}
+          {(() => {
+            const expensesByDate = {};
+            transactions.forEach(t => {
+              if (t.transaction_type === 'Expense' && t.timestamp) {
+                const ds = new Date(t.timestamp.seconds * 1000).toDateString();
+                expensesByDate[ds] = (expensesByDate[ds] || 0) + t.amount;
+              }
+            });
+            const allDays = Object.keys(expensesByDate).map(s => new Date(s)).sort((a, b) => b - a);
+            let streak = 0;
+            const DAILY_LIMIT = 50;
+            for (const day of allDays) {
+              if (expensesByDate[day.toDateString()] <= DAILY_LIMIT) streak++;
+              else break;
+            }
+            const todaySpent = expensesByDate[new Date().toDateString()] || 0;
+            const remaining  = DAILY_LIMIT - todaySpent;
+            return (
+              <Link to="/streak" className="w-full bg-white border border-slate-100 rounded-[1.5rem] px-5 py-4 flex items-center justify-between mb-8 active:scale-95 transition-all shadow-sm">
+                <div className="flex items-center space-x-3">
+                  <span className="text-2xl">🔥</span>
+                  <div>
+                    <p className="text-[15px] font-bold text-slate-900">{streak} day streak</p>
+                    <p className="text-[12px] text-slate-400 font-medium">
+                      {remaining >= 0 ? `₵${remaining.toFixed(0)} left today` : `₵${Math.abs(remaining).toFixed(0)} over limit`}
+                    </p>
+                  </div>
+                </div>
+                <ChevronRight className="w-5 h-5 text-slate-300" />
+              </Link>
+            );
+          })()}
 
           <div className="flex items-center justify-between px-2 mb-4">
             <button onClick={handlePrevDay} className="p-2 -ml-2 text-indigo-600 hover:bg-indigo-50 rounded-full transition-colors active:scale-95">
@@ -160,6 +234,7 @@ function Dashboard() {
                           <div>
                             <p className="text-[17px] font-bold text-slate-900 tracking-tight mb-0.5">{t.category}</p>
                             <p className="text-[13px] text-slate-500 font-medium">{timeStr} • {t.payment_method}</p>
+                            {t.note ? <p className="text-[12px] text-slate-400 italic mt-0.5">"{t.note}"</p> : null}
                           </div>
                         </div>
                         <div className="text-right">
@@ -207,7 +282,6 @@ function Dashboard() {
 
         </div>
 
-        {/* --- iOS ACTION SHEET OVERLAY --- */}
         {selectedTx && (
           <div className="absolute inset-0 z-50 flex items-end justify-center sm:rounded-[2rem] overflow-hidden">
             <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setSelectedTx(null)}></div>
@@ -218,7 +292,6 @@ function Dashboard() {
                     {selectedTx.category} • ₵{selectedTx.amount.toFixed(2)}
                   </p>
                 </div>
-                {/* New Edit Button */}
                 <button 
                   onClick={openEditModal}
                   className="w-full py-4 border-b border-slate-200 text-[17px] font-semibold text-indigo-600 active:bg-slate-100 transition-colors"
@@ -226,20 +299,25 @@ function Dashboard() {
                   Edit Transaction
                 </button>
                 <button 
-                  onClick={() => handleDelete(selectedTx.id)}
-                  className="w-full py-4 text-[17px] font-semibold text-rose-500 active:bg-slate-100 transition-colors"
+                  onClick={() => {
+                    if (confirmingDelete) {
+                      handleDelete(selectedTx.id);
+                    } else {
+                      setConfirmingDelete(true);
+                    }
+                  }}
+                  className={`w-full py-4 text-[17px] font-semibold transition-colors active:opacity-70 ${confirmingDelete ? 'bg-rose-500 text-white' : 'text-rose-500 active:bg-slate-100'}`}
                 >
-                  Delete Transaction
+                  {confirmingDelete ? '⚠️ Tap again to confirm delete' : 'Delete Transaction'}
                 </button>
               </div>
-              <button onClick={() => setSelectedTx(null)} className="w-full py-4 bg-white/90 backdrop-blur-xl rounded-2xl text-[17px] font-bold text-slate-900 active:bg-slate-100 transition-colors shadow-lg border border-white/20">
+              <button onClick={() => { setSelectedTx(null); setConfirmingDelete(false); }} className="w-full py-4 bg-white/90 backdrop-blur-xl rounded-2xl text-[17px] font-bold text-slate-900 active:bg-slate-100 transition-colors shadow-lg border border-white/20">
                 Cancel
               </button>
             </div>
           </div>
         )}
 
-        {/* --- INLINE EDIT MODAL --- */}
         {editingTx && (
           <div className="absolute inset-0 z-[60] flex items-center justify-center p-4 sm:rounded-[2rem] overflow-hidden">
             <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setEditingTx(null)}></div>
@@ -270,6 +348,16 @@ function Dashboard() {
                     onChange={(e) => setEditAmount(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 text-slate-900 text-lg font-bold rounded-xl px-4 py-3 outline-none focus:border-indigo-500"
                     required
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 block">Note</label>
+                  <textarea
+                    value={editNote}
+                    onChange={(e) => setEditNote(e.target.value)}
+                    placeholder="Optional — what was this for?"
+                    rows={2}
+                    className="w-full bg-slate-50 border border-slate-200 text-slate-900 text-base rounded-xl px-4 py-3 outline-none focus:border-indigo-500 resize-none leading-snug"
                   />
                 </div>
                 <button type="submit" className="w-full py-4 mt-2 rounded-xl bg-indigo-600 text-white font-bold flex items-center justify-center space-x-2 hover:bg-indigo-700 transition-colors">
